@@ -1,0 +1,182 @@
+---
+title: "House_Price"
+author: "PengJi"
+date: "12/14/2020"
+output: pdf_document
+---
+
+```{r}
+library(corrplot)
+library(Boruta)
+library(leaps)
+library(lubridate)
+library(caTools)
+library(car)
+library(stats)
+library(lmtest)
+library(forecast)
+
+setwd("/Users/jipeng/Documents/Study/Study_myself/Blog/source/_posts/Regression")
+```
+
+```{r}
+data <- read.csv("/Users/jipeng/Documents/Study/Study_myself/Kaggle/house-prices-advanced-regression-techniques/train.csv", header = TRUE)
+```
+
+# data cleaning
+
+```{r}
+count_na <- function(x) {
+  return(sum(is.na(x)))
+}
+apply(data, 2, count_na) / nrow(data)
+```
+
+delete variables: LotFrontage, Alley, FireplaceQu, PoolQC, Fence, MiscFeature
+
+```{r}
+data <- subset(data, select = -c(LotFrontage, Alley, FireplaceQu, PoolQC, Fence, MiscFeature))
+data <- na.omit(data)
+
+set.seed(123) 
+split <- sample.split(data, SplitRatio = 0.6) 
+train <- subset(data, split == TRUE)
+```
+
+# choosing variables
+
+```{r}
+png(file = "correlation.png", bg = "transparent")
+corrplot(cor(train[, c("MSSubClass", "LotArea", "OverallQual", "OverallCond", "YearBuilt", "YearRemodAdd",  "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "BsmtFullBath", "BsmtHalfBath", "FullBath", "HalfBath", "BedroomAbvGr", "KitchenAbvGr", "TotRmsAbvGrd", "Fireplaces", "GarageCars", "GarageArea", "WoodDeckSF", "ScreenPorch", "PoolArea", "SalePrice")]))
+dev.off()
+```
+
+```{r}
+set.seed(1)
+boruta <- Boruta(SalePrice ~ ., data = train)
+print(boruta)
+```
+
+```{r}
+# mod <- lm(SalePrice ~ . - Id, data = train)
+# cp <- regsubsets(SalePrice ~ . - Id, method = c("exhaustive"), nbest = 3, data = train, really.big=T)
+# subsets(cp, statistic = "cp", legend = F, main = "Mallows CP", xlim=c(0, 15), ylim=c(0, 600))
+```
+
+According to the result, I wanna choose variables: "LotArea", "YearBuilt", "GrLivArea", "BedroomAbvGr", "KitchenAbvGr", "HouseStyle", "SalePrice"
+
+```{r}
+cols <- c("LotArea", "YearBuilt", "GrLivArea", "BedroomAbvGr", "KitchenAbvGr", "HouseStyle", "SalePrice")
+train_data <- subset(train, select = cols)
+```
+
+# Analysing variables
+
+```{r}
+n_row <- nrow(train_data)
+n_col <- ncol(train_data)
+k = 1 + log2(n_row)
+
+col_index <- c(1: 5, 7)
+
+png(file = "hist.png", bg = "transparent")
+par(mfrow = c(2, 3))
+for (i in col_index) {
+  hist(train_data[, i], breaks = k, main = names(train)[i], xlab = names(train)[i])
+}
+dev.off()
+```
+
+```{r}
+png(file = "qqplot.png", bg = "transparent")
+par(mfrow = c(2, 3))
+for (i in col_index) {
+  qqPlot(~ train_data[, i], ylab = names(train_data)[i])
+}
+dev.off()
+```
+
+```{r}
+png(file = "correlation_chosen.png", bg = "transparent")
+corrplot(cor(train_data[,col_index]))
+dev.off()
+```
+
+```{r warning=FALSE}
+png(file = "scatterplot.png", bg = "transparent")
+scatterplotMatrix(~ SalePrice + LotArea + YearBuilt + GrLivArea + BedroomAbvGr + KitchenAbvGr | HouseStyle, train_data)
+dev.off()
+```
+
+```{r}
+png(file = "density.png", bg = "transparent")
+par(mfrow = c(2, 3))
+for (i in col_index) {
+  densityPlot(train_data[, i], xlab = names(train_data)[i])
+}
+dev.off()
+```
+
+```{r}
+apply(train_data, 2, min)
+```
+
+```{r}
+summary(p1 <- powerTransform(cbind(SalePrice, LotArea, YearBuilt, GrLivArea) ~ 1, data = train_data, family = "bcPower"))
+transformed <- bcPower(with(train_data, cbind(SalePrice, LotArea, YearBuilt, GrLivArea)), coef(p1, round = T))
+transformed_train <- as.data.frame(cbind(transformed, as.data.frame(with(train_data, cbind(BedroomAbvGr, KitchenAbvGr, HouseStyle)))))
+names(transformed_train) <- c("SalePrice", "LotArea", "YearBuilt", "GrLivArea", "BedroomAbvGr", "KitchenAbvGr", "HouseStyle")
+transformed_train$HouseStyle <- as.factor(transformed_train$HouseStyle)
+```
+
+```{r}
+mod <- lm(SalePrice ~ ., data = transformed_train)
+summary(mod)
+```
+
+```{r}
+png(file = "residual.png", bg = "transparent")
+residualPlot(mod)
+dev.off()
+```
+
+```{r}
+outlierTest(mod)
+```
+```{r}
+outliers <- c(715, 16, 225, 349)
+```
+
+```{r}
+png(file = "influence.png", bg = "transparent")
+influenceIndexPlot(mod, id = list(n = 12), vars = "Cook")
+dev.off()
+```
+```{r}
+influentials <- c(6, 16, 100, 181, 211, 320, 490, 565, 582, 639, 685, 715)
+```
+
+```{r}
+mod1 <- update(mod, subset = !(rownames(transformed_train) %in% c(outliers, influentials)))
+summary(mod1)
+```
+```{r}
+vif(mod1)
+```
+
+```{r}
+test <- subset(data, split == FALSE)
+test_data <- subset(test, select = cols)
+transformed_t <- bcPower(with(test_data, cbind(SalePrice, LotArea, YearBuilt, GrLivArea)), coef(p1, round = T))
+transformed_test <- as.data.frame(cbind(transformed_t, as.data.frame(with(test_data, cbind(BedroomAbvGr, KitchenAbvGr, HouseStyle)))))
+names(transformed_test) <- c("SalePrice", "LotArea", "YearBuilt", "GrLivArea", "BedroomAbvGr", "KitchenAbvGr", "HouseStyle")
+transformed_test$HouseStyle <- as.factor(transformed_test$HouseStyle)
+```
+
+```{r}
+predict_test <- predict(mod1, newdata = transformed_test)
+accuracy(predict_test, transformed_test$SalePrice)
+accuracy(exp(predict_test), test_data$SalePrice)
+```
+
+
